@@ -49,3 +49,19 @@ def test_lookup_terms():
 def test_core_jargon_has_entries():
     out = lookup_terms(["유상증자", "전환사채", "물적분할", "밸류업"])
     assert all(out.values()), out
+
+
+def test_inner_title_beats_wrapper():
+    assert translate_report_name("[기재정정]주요사항보고서(유상증자결정)") == (
+        "[Amended] Paid-in Capital Increase (Rights Offering / Placement) Decision"
+    )
+    assert translate_report_name("주요사항보고서(유형자산양수결정)") == "Acquisition of Tangible Assets"
+
+
+def test_relation_label():
+    from dart_mcp.glossary import relation_label
+
+    assert relation_label("최대주주 본인") == "Largest shareholder (self)"
+    assert relation_label("최대주주의 특수관계인") == "Related party of largest shareholder"
+    assert relation_label("계열회사 임원") == "Executive of affiliate"
+    assert relation_label("") is None

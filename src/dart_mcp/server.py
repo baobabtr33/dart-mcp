@@ -288,6 +288,25 @@ async def collect_filings(params: dict[str, Any], start: str, end: str, limit: i
     return rows, total, False
 
 
+# Ownership filings (type D) can number in the thousands per year at large companies
+# (one per executive stock grant), so they are capped separately from material filings.
+OWNERSHIP_SCAN_CAP = 200
+
+
+async def collect_company_filings(corp: Corp, start: str, end: str) -> tuple[list[dict], bool]:
+    """All filing types for one company, newest first, with ownership filings capped."""
+    types = [code for code, _ in glossary.FILING_TYPES.values()]
+
+    async def one(code: str) -> tuple[list[dict], bool]:
+        params = list_params(corp, None, None, False) | {"pblntf_ty": code}
+        rows, _, truncated = await collect_filings(params, start, end, OWNERSHIP_SCAN_CAP if code == "D" else 1000)
+        return rows, truncated
+
+    results = await asyncio.gather(*(one(code) for code in types))
+    rows = sorted((r for chunk, _ in results for r in chunk), key=lambda r: r.get("rcept_no", ""), reverse=True)
+    return rows, any(t for _, t in results)
+
+
 def list_params(
     corp: Corp | None, filing_type: str | None, market: str | None, include_amended_originals: bool
 ) -> dict[str, Any]:
@@ -385,9 +404,10 @@ async def get_material_events(
     """
     start, end = date_range(days, start_date, end_date)
     corp = await service.resolve(company) if company else None
-    params = list_params(corp, None, market, False)
-    scan_limit = 1000 if corp else 3000
-    rows, total, truncated = await collect_filings(params, start, end, scan_limit)
+    if corp:
+        rows, truncated = await collect_company_filings(corp, start, end)
+    else:
+        rows, _, truncated = await collect_filings(list_params(None, None, market, False), start, end, 3000)
 
     wanted = set(categories or [])
     floor = analysis.SEVERITY_ORDER[min_severity]
@@ -701,7 +721,7 @@ async def get_largest_shareholders(
             {
                 "name_ko": r.get("nm"),
                 "relation_ko": relation or None,
-                "relation_en": glossary.RELATIONS.get(relation.replace(" ", "")),
+                "relation_en": glossary.relation_label(relation),
                 "share_class_ko": kind or None,
                 "share_class_en": glossary.STOCK_KINDS.get(kind.replace(" ", "")),
                 "shares_start": parse_amount(r.get("bsis_posesn_stock_co")),

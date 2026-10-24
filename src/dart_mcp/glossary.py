@@ -157,6 +157,61 @@ REPORT_TITLES: dict[str, str] = {
     "수시공시의무관련사항(공정공시)": "Ad-hoc Disclosure (Fair Disclosure)",
     "장래사업ㆍ경영계획(공정공시)": "Future Business Plan (Fair Disclosure)",
     "투자판단관련주요경영사항": "Material Management Matter for Investment Decisions",
+    "최대주주변경을수반하는주식담보제공계약체결": "Share Pledge by Largest Shareholder That Could Change Control",
+    "최대주주변경을수반하는주식양수도계약체결": "Share Purchase Agreement Transferring Control",
+    "최대주주변경을수반하는주식양수도계약해제ㆍ취소등": "Termination of Control-Transfer Share Purchase Agreement",
+    "경영권변경등에관한계약체결": "Change-of-Control Agreement",
+    "공개매수설명서": "Tender Offer Prospectus",
+    "경영권분쟁소송": "Control Dispute Litigation",
+    "주권매매거래정지기간변경": "Trading Halt Period Changed",
+    "횡령ㆍ배임혐의발생": "Suspected Embezzlement / Breach of Trust",
+    "횡령ㆍ배임혐의진행사항": "Embezzlement / Breach of Trust Case Update",
+    "횡령ㆍ배임사실확인": "Embezzlement / Breach of Trust Confirmed",
+    "회생절차개시결정": "Corporate Rehabilitation Proceedings Commenced",
+    "파산신청": "Bankruptcy Petition",
+    "파산신청기각": "Bankruptcy Petition Dismissed",
+    "대출원리금연체사실발생": "Loan Principal/Interest Default",
+    "불성실공시법인지정예고": "Notice of Planned Unfaithful Disclosure Designation",
+    "불성실공시법인미지정": "Not Designated as Unfaithful Disclosure Company",
+    "관리종목지정우려종목": "At Risk of Administrative Issue Designation",
+    "상장적격성실질심사": "Listing Eligibility Review",
+    "주주명부폐쇄기간또는기준일설정": "Record Date / Shareholder Register Closure",
+    "중간(분기)배당을위한주주명부폐쇄(기준일)결정": "Record Date for Interim/Quarterly Dividend",
+    "임원ㆍ주요주주특정증권등거래계획보고서": "Insider Trading Plan Report (pre-announced insider trade)",
+    "임원ㆍ주요주주특정증권등거래계획철회보고서": "Insider Trading Plan Withdrawal",
+    "주식매수선택권부여에관한신고": "Stock Option Grant",
+    "의결권대리행사권유참고서류": "Proxy Solicitation Document",
+    "증권발행결과": "Securities Issuance Result",
+    "결산실적공시예고": "Earnings Release Preview",
+    "독립이사의선임ㆍ해임또는중도퇴임에관한신고": "Independent Director Appointment/Resignation",
+    "신탁계약에의한취득상황보고서": "Treasury Stock Trust Purchase Status",
+    "신탁계약해지결과보고서": "Treasury Stock Trust Termination Results",
+    "소액공모공시서류": "Small-Scale Public Offering Document",
+    "소액공모실적보고서": "Small-Scale Public Offering Results",
+    "유형자산양수결정": "Acquisition of Tangible Assets",
+    "유형자산양도결정": "Disposal of Tangible Assets",
+    "타법인주식및출자증권양수결정": "Acquisition of Shares in Another Company",
+    "타법인주식및출자증권양도결정": "Disposal of Shares in Another Company",
+    "자기전환사채만기전취득결정": "Early Repurchase of Own Convertible Bonds",
+    "자기전환사채매도결정": "Resale of Repurchased Convertible Bonds",
+    "전환사채(해외전환사채포함)발행후만기전사채취득": "Early Repurchase of Convertible Bonds",
+    "전환청구권행사": "Conversion of Convertible Bonds into Shares",
+    "신주인수권행사": "Exercise of Warrants",
+    "자기주식처분결과보고서": "Treasury Stock Disposal Results",
+    "주식병합결정": "Reverse Stock Split (Share Consolidation) Decision",
+    "주식분할결정": "Stock Split Decision",
+    "금전대여결정": "Loan to Another Party",
+    "타인에대한담보제공결정": "Collateral Provided for Another Party",
+    "단기차입금증가결정": "Short-Term Borrowing Increase",
+    "본점소재지변경": "Headquarters Relocation",
+    "권리락": "Ex-Rights",
+    "합병등종료보고서": "Merger/Transaction Completion Report",
+    "유상증자최종발행가액확정": "Final Issue Price of Paid-in Capital Increase",
+    "유상증자또는주식관련사채등의청약결과": "Subscription Results of Share/Equity-Linked Bond Offering",
+    "기타경영사항": "Other Management Matters",
+    "전환가액의조정": "Conversion Price Adjustment (Refixing)",
+    "신주인수권행사가액의조정": "Warrant Exercise Price Adjustment (Refixing)",
+    "정정명령부과": "Correction Ordered by FSS",
 }
 
 TITLE_PREFIXES = {
@@ -171,6 +226,8 @@ TITLE_PREFIXES = {
 }
 
 _TITLE_KEYS = sorted(REPORT_TITLES, key=len, reverse=True)
+# Generic container titles like 주요사항보고서(유상증자결정): prefer the specific inner title.
+_WRAPPER_TITLES = {"주요사항보고서", "기타경영사항", "기타시장안내", "증권신고서", "투자설명서"}
 _PREFIX_RE = re.compile(r"^\s*\[([^\]]+)\]\s*")
 _PERIOD_RE = re.compile(r"\((\d{4})\.(\d{2})\)")
 
@@ -185,7 +242,9 @@ def translate_report_name(report_nm: str) -> str | None:
         rest = rest[m.end() :]
 
     compact = rest.replace(" ", "")
-    title = next((REPORT_TITLES[k] for k in _TITLE_KEYS if k in compact), None)
+    matches = [k for k in _TITLE_KEYS if k in compact]
+    specific = [k for k in matches if k not in _WRAPPER_TITLES]
+    title = REPORT_TITLES[(specific or matches)[0]] if matches else None
     if title is None:
         return None
     if (period := _PERIOD_RE.search(compact)) is not None:
@@ -299,6 +358,35 @@ RELATIONS = {
     "자사주": "Treasury stock",
     "우리사주조합": "Employee stock ownership association",
 }
+
+_RELATION_PATTERNS = (
+    ("최대주주본인", "Largest shareholder (self)"),
+    ("본인", "Largest shareholder (self)"),
+    ("특수관계인", "Related party of largest shareholder"),
+    ("계열회사임원", "Executive of affiliate"),
+    ("계열회사", "Affiliate"),
+    ("계열사", "Affiliate"),
+    ("등기임원", "Registered director"),
+    ("임원", "Executive / director"),
+    ("재단", "Foundation"),
+    ("친인척", "Relative"),
+    ("배우자", "Spouse"),
+    ("자녀", "Child"),
+    ("우리사주", "Employee stock ownership association"),
+    ("자사주", "Treasury stock"),
+    ("자기주식", "Treasury stock"),
+)
+
+
+def relation_label(relation_ko: str | None) -> str | None:
+    """English label for a shareholder relationship such as 최대주주의 특수관계인."""
+    key = (relation_ko or "").replace(" ", "")
+    if not key:
+        return None
+    if key in RELATIONS:
+        return RELATIONS[key]
+    return next((en for ko, en in _RELATION_PATTERNS if ko in key), None)
+
 
 STOCK_KINDS = {
     "보통주": "Common",

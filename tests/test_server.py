@@ -192,8 +192,16 @@ async def test_material_events_company_red_flags(mock_dart):
         {"report_nm": "주요사항보고서(전환사채권발행결정)", "rcept_no": f"2024010100000{i}", "rcept_dt": "20240101"}
         for i in range(2)
     ]
-    mock_dart({"list.json": {"status": "000", "total_count": 2, "total_page": 1, "list": rows}})
+
+    def handler(request):
+        # Company scans query each filing type separately; only type B has these rows.
+        found = rows if request.url.params["pblntf_ty"] == "B" else []
+        return httpx.Response(200, json={"status": "000", "total_count": len(found), "total_page": 1, "list": found})
+
+    seen = mock_dart({"list.json": handler})
     out = await server.get_material_events("005930")
+    assert len(seen) == 10
+    assert out["filings_scanned"] == 2
     assert any("dilutive" in f for f in out["red_flags"])
 
 
