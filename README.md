@@ -99,3 +99,9 @@ uv run ruff check src tests && uv run ruff format --check src tests
 ```
 
 The tests use a mocked DART backend, so no API key or network is needed.
+
+## License
+
+[MIT](LICENSE). Free to use, modify and redistribute, including commercially, as long as
+the copyright notice is kept. DART data belongs to the Financial Supervisory Service
+(금융감독원); follow OpenDART's terms of use.
