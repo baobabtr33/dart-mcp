@@ -82,3 +82,48 @@ def find_snippets(text: str, keyword: str, *, radius: int = 300, limit: int = 10
         out.append({"offset": idx, "snippet": text[lo:hi]})
         start = hi
     return out
+
+
+# English section names an analyst would ask for, mapped to Korean heading keywords
+# used in DART annual/quarterly reports and registration statements.
+SECTION_ALIASES: dict[str, tuple[str, ...]] = {
+    "overview": ("회사의 개요",),
+    "business": ("사업의 내용",),
+    "products": ("주요 제품", "주요제품"),
+    "risk_factors": ("투자위험요소", "위험요소", "위험관리"),
+    "mdna": ("경영진단", "분석의견"),
+    "financials": ("재무에 관한 사항",),
+    "notes": ("연결재무제표 주석", "재무제표 주석", "주석"),
+    "dividends": ("배당에 관한 사항",),
+    "audit": ("감사인의 감사의견", "감사의견"),
+    "board": ("이사회", "회사의 기관"),
+    "shareholders": ("주주에 관한 사항",),
+    "executives": ("임원 및 직원", "임원의 현황"),
+    "compensation": ("보수",),
+    "affiliates": ("계열회사",),
+    "related_party": ("대주주 등과의 거래", "특수관계인"),
+    "litigation": ("우발부채", "소송"),
+    "investor_protection": ("투자자 보호",),
+}
+
+_ROMAN_RE = re.compile(r"^[IVX]+\.\s")
+
+
+def extract_section(doc: FilingDocument, section: str) -> tuple[str, str] | None:
+    """Return (heading, text) for an English alias or a Korean heading keyword."""
+    keywords = SECTION_ALIASES.get(section.lower().strip(), (section,))
+    for keyword in keywords:
+        compact = keyword.replace(" ", "")
+        for i, entry in enumerate(doc.toc):
+            title = str(entry["title"])
+            if compact not in title.replace(" ", ""):
+                continue
+            start = int(entry["offset"])
+            top_level = bool(_ROMAN_RE.match(title))
+            end = len(doc.text)
+            for later in doc.toc[i + 1 :]:
+                if not top_level or _ROMAN_RE.match(str(later["title"])):
+                    end = int(later["offset"])
+                    break
+            return title, doc.text[start:end]
+    return None

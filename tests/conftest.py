@@ -14,10 +14,10 @@ CORP_XML = """<?xml version="1.0" encoding="UTF-8"?>
     <corp_eng_name>SAMSUNG ELECTRONICS CO,.LTD</corp_eng_name><stock_code>005930</stock_code><modify_date>20240101</modify_date></list>
   <list><corp_code>00164779</corp_code><corp_name>SK하이닉스</corp_name>
     <corp_eng_name>SK hynix Inc.</corp_eng_name><stock_code>000660</stock_code><modify_date>20240101</modify_date></list>
-  <list><corp_code>00164742</corp_code><corp_name>현대자동차</corp_name>
-    <corp_eng_name>Hyundai Motor Company</corp_eng_name><stock_code>005380</stock_code><modify_date>20240101</modify_date></list>
-  <list><corp_code>00164788</corp_code><corp_name>현대모비스</corp_name>
-    <corp_eng_name>HYUNDAI MOBIS</corp_eng_name><stock_code>012330</stock_code><modify_date>20240101</modify_date></list>
+  <list><corp_code>00126371</corp_code><corp_name>삼성SDI</corp_name>
+    <corp_eng_name>Samsung SDI Co., Ltd.</corp_eng_name><stock_code>006400</stock_code><modify_date>20240101</modify_date></list>
+  <list><corp_code>00149655</corp_code><corp_name>삼성물산</corp_name>
+    <corp_eng_name>SAMSUNG C&amp;T CORPORATION</corp_eng_name><stock_code>028260</stock_code><modify_date>20240101</modify_date></list>
   <list><corp_code>00999999</corp_code><corp_name>삼성전자서비스</corp_name>
     <corp_eng_name>Samsung Electronics Service</corp_eng_name><stock_code> </stock_code><modify_date>20240101</modify_date></list>
 </result>""".encode()

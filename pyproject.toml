@@ -1,7 +1,7 @@
 [project]
-name = "dart-mcp"
-version = "0.1.0"
-description = "MCP server that makes Korea's DART corporate filings usable by English-speaking analysts and AI agents"
+name = "korea-dart-mcp"
+version = "0.2.0"
+description = "English-first MCP server for Korean corporate filings (DART): filings, financials, ownership and red flags for foreign investors and AI agents"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -11,7 +11,21 @@ dependencies = [
     "httpx>=0.27",
 ]
 
+keywords = ["mcp", "dart", "korea", "kospi", "kosdaq", "sec-filings", "financial-data", "llm", "claude"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+[project.urls]
+Homepage = "https://github.com/baobabtr33/dart-mcp"
+Issues = "https://github.com/baobabtr33/dart-mcp/issues"
+
 [project.scripts]
+korea-dart-mcp = "dart_mcp.server:main"
 dart-mcp = "dart_mcp.server:main"
 
 [dependency-groups]

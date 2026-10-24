@@ -1,107 +1,172 @@
-# dart-mcp
+<!-- mcp-name: io.github.baobabtr33/dart-mcp -->
 
-An MCP server that gives AI agents and foreign investors access to **DART**, Korea's
-electronic corporate disclosure system and its counterpart to SEC EDGAR.
+# Korea DART MCP
 
-Most Korean filings exist only in Korean, and DART's API returns Korean labels and terse
-codes. This server resolves companies by English name or ticker. It translates filing
-titles, account names and governance terms with a curated glossary, so that 유상증자 comes
-back as "Paid-in Capital Increase (Rights Offering / Placement)" and not a literal
-machine translation. Every response keeps the original Korean beside the English, so the
-calling model can check the translation and cite the source.
+**Read Korean corporate filings in English, through Claude or any MCP client.**
+
+[![CI](https://github.com/baobabtr33/dart-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/baobabtr33/dart-mcp/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/korea-dart-mcp)](https://pypi.org/project/korea-dart-mcp/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Korea has one of the world's largest stock markets, yet its disclosure system, DART, is
+almost entirely in Korean. Samsung's annual report, a KOSDAQ company's convertible bond terms, and
+a chaebol's ownership chart are all public, but you can only use them if you read Korean and
+know what to look for.
+
+This server gives an AI agent both of those skills. Ask in English:
+
+> *"What has Samsung Electronics disclosed in the last six months, and is anything a red flag?"*
+
+The agent gets back English filing titles, events grouped by type and severity, and
+plain-English warnings. Every answer links to the original filing.
+
+The output looks like this (shortened):
+
+```
+get_material_events("Samsung Electronics", days=180)
+→ counts_by_category: { capital_return, periodic, ownership, earnings, ... }
+→ events:   [{ title_en: "Treasury Stock Buyback Decision",
+               title_ko: "주요사항보고서(자기주식취득결정)",
+               category: "capital_return", severity: "notable",
+               why_it_matters: "Shareholder returns: buybacks, cancellations, dividends, or a Value-up plan.",
+               url: "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=…" }, …]
+→ red_flags: []
+```
+
+## Why this one
+
+Several DART MCP servers already exist, and most are built for Korean speakers: Korean
+docs, Korean output, one tool per API endpoint. This one is built for people who **don't**
+read Korean.
+
+| | Typical DART wrapper | **Korea DART MCP** |
+|---|---|---|
+| Find a company | By Korean name or the 8-digit `corp_code` | English name, Korean name or ticker (`Samsung Electronics`, `삼성전자` and `005930` all work) |
+| Filing titles | `[기재정정]주요사항보고서(전환사채권발행결정)` | Adds `[Amended] Convertible Bond (CB) Issuance Decision` |
+| Financials | Raw strings with Korean account names | Integer KRW, English account labels, plus margins, growth, ROE and leverage |
+| "Anything I should worry about?" | You read every filing | `get_material_events`: 13 categories, severity levels and red-flag rules for Korea |
+| Reading a 300-page annual report | Download a ZIP | `section="business"`, `"mdna"` or `"risk_factors"` jumps to the part you need |
+| Context | None | US comparisons (13D, Form 4, 10-K) and a primer on chaebol, KOSDAQ and Value-up |
+| Translation | Up to the LLM, sometimes wrong | A curated glossary for jargon. Korean is always returned too, so the model can verify |
 
 ## Tools
 
-| Tool | What it answers |
+| Tool | Ask it… |
 |---|---|
-| `search_company` | Which entity is "Hyundai"? Searches English name, Korean name, ticker or corp_code |
-| `get_company_profile` | CEO, market, industry, fiscal year-end, website |
-| `get_recent_filings` | What did the company (or the whole market) file recently? Titles are in English |
-| `get_filing_text` | Full filing body with a table of contents, paging and keyword search |
-| `get_financial_statements` | XBRL BS / IS / CF with English account labels and integer KRW amounts |
-| `get_major_shareholder_changes` | 5% block holdings, Korea's version of 13D/13G |
-| `get_insider_trades` | Executive and major-shareholder holdings, Korea's version of Form 4 |
-| `get_largest_shareholders` | Controlling shareholder and related parties (chaebol structure) |
-| `get_dividends` | DPS, payout ratio, yield |
-| `translate_terms` | Glossary lookup for DART jargon, with no API call |
+| `get_material_events` | "What's going on at this company? Any red flags?" or "Which KOSDAQ companies issued convertible bonds this month?" |
+| `get_financial_statements` | Balance sheet, income statement and cash flow with English labels and `key_metrics` |
+| `compare_companies` | Revenue, margins, ROE and leverage for up to 10 companies side by side |
+| `get_filing_text` | Read any filing by section (`business`, `mdna`, `risk_factors`, `audit`, ...), by keyword, or page by page |
+| `get_recent_filings` | Filings for a company or the whole market, with English titles. Ranges longer than 90 days are split automatically |
+| `get_insider_trades` | Korea's Form 4, with a net buy/sell signal across insiders |
+| `get_major_shareholder_changes` | Korea's 13D/13G: who crossed or changed a 5% stake |
+| `get_largest_shareholders` | Controlling shareholder and related parties, i.e. the chaebol control structure |
+| `get_dividends` | Dividend per share, payout ratio and yield |
+| `get_company_profile` | CEO, market, industry, fiscal year-end, IR site |
+| `search_company` | Which "Samsung"? Shows the candidates, listed companies first |
+| `translate_terms` | Glossary for DART jargon (유상증자, 최대주주, 리픽싱 ...), no API call needed |
 
-It also has the prompt `company_brief`, which builds an English investment brief from these
-tools, and the resource `dart://glossary/filing-types`.
+It also has a **`company_brief` prompt**, which builds a full English brief from these tools,
+and a **`dart://guide/korea-primer` resource** that explains Korean disclosure rules and
+common pitfalls.
 
-## Setup
+All tools are marked read-only, so clients can approve them automatically.
 
-1. Get a free API key from [OpenDART](https://opendart.fss.or.kr/uss/umt/EgovMberInsertView.do).
-   It allows 20,000 requests a day.
-2. Install [uv](https://docs.astral.sh/uv/).
+## Quick start
 
-### Claude Code
+**1. Get a free DART API key** (2 minutes, 20,000 requests/day). The OpenDART site is in
+Korean, so follow the [English walkthrough](docs/GET_API_KEY.md).
+
+**2. Add it to your client.**
+
+Claude Code:
 
 ```bash
-claude mcp add dart -e DART_API_KEY=your_key -- uv --directory /path/to/dart-mcp run dart-mcp
+claude mcp add dart -e DART_API_KEY=your_key -- uvx korea-dart-mcp
 ```
 
-### Claude Desktop / other MCP clients
+Claude Desktop, Cursor, Windsurf and other MCP clients:
 
 ```json
 {
   "mcpServers": {
     "dart": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/dart-mcp", "run", "dart-mcp"],
+      "command": "uvx",
+      "args": ["korea-dart-mcp"],
       "env": { "DART_API_KEY": "your_key" }
     }
   }
 }
 ```
 
-### Remote (HTTP)
+`uvx` comes with [uv](https://docs.astral.sh/uv/getting-started/installation/). To run it
+from source instead, use `"command": "uv", "args": ["--directory", "/path/to/dart-mcp", "run", "korea-dart-mcp"]`.
+
+**3. Ask a question.**
+
+- "Write an English investment brief on Samsung Electronics." (or use the `company_brief` prompt)
+- "Compare Samsung Electronics and SK hynix on margins and ROE for 2024."
+- "Who controls Samsung Electronics? Show the largest shareholder and related parties."
+- "Have Samsung Electronics insiders been buying or selling this year?"
+- "Summarize the business section of Samsung Electronics' latest annual report in English."
+- "Which KOSDAQ companies announced convertible bond issues in the last 30 days?"
+
+## Remote / team deployment
 
 ```bash
-DART_API_KEY=your_key uv run dart-mcp --transport streamable-http --host 0.0.0.0 --port 8000
-# or
-docker build -t dart-mcp . && docker run -e DART_API_KEY=your_key -p 8000:8000 dart-mcp
+docker build -t korea-dart-mcp .
+docker run -e DART_API_KEY=your_key -p 8000:8000 -v dart-cache:/data korea-dart-mcp
+# serves MCP over streamable HTTP at http://localhost:8000/mcp
 ```
 
-The HTTP transport has no authentication. Put it behind a proxy or gateway that handles
-auth before you expose it publicly.
-
-## Configuration
+The HTTP transport has no authentication. Put it behind a gateway that handles auth before
+exposing it.
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `DART_API_KEY` | (required) | OpenDART key |
-| `DART_MCP_CACHE_DIR` | `~/.cache/dart_mcp` | Where the corp code list (about 100k companies) is cached. It refreshes weekly |
-| `DART_MCP_LOG_LEVEL` | `INFO` | Log level. Logs go to stderr |
-| `DART_MCP_HOST` / `DART_MCP_PORT` | `127.0.0.1` / `8000` | HTTP transport bind address |
+| `DART_MCP_CACHE_DIR` | `~/.cache/dart_mcp` | Company list cache (about 100k entities, refreshed weekly) |
+| `DART_MCP_LOG_LEVEL` | `INFO` | Logs go to stderr |
+| `DART_MCP_HOST` / `DART_MCP_PORT` | `127.0.0.1` / `8000` | HTTP bind address |
 
-## Example questions
+## How it works
 
-- "What did Samsung Electronics disclose in the last two weeks? Anything material?"
-- "Compare SK hynix's operating margin for 2023 and 2024."
-- "Who controls Hyundai Motor, and has any 5% holder changed position this year?"
-- "Find all convertible bond issuances on KOSDAQ this month."
-- "Summarize the risk factors section of this annual report in English."
+- **Company resolution:** DART's full company list (about 100k entities, with English names
+  where registered) is cached locally and matched by ticker, English name or Korean name.
+  Legal-form suffixes like "Co., Ltd." and "(주)" are ignored.
+- **Glossary** (`glossary.py`): hand-curated mappings for 80+ filing types, financial
+  accounts, ownership relationships and governance terms. Accounts outside the glossary fall
+  back to their IFRS XBRL tag (`ifrs-full_ProfitLossAttributableToOwnersOfParent` becomes
+  "Profit loss attributable to owners of parent").
+- **Diagnostics** (`analysis.py`): rules that classify filings into categories such as
+  distress, control change, dilution and exchange scrutiny. On top of that are red-flag
+  rules for Korean market patterns, like serial CB issuance, conversion-price refixing and
+  frequent amendments. Every rule is plain code with unit tests, and none of it is a black box.
+- **Production details:** retries with backoff, a TTL cache, a concurrency limit, DART
+  status codes turned into clear errors, EUC-KR fallback, and paging for large filings.
 
 ## Limitations
 
-- Structured financials (XBRL) start in 2015. Some financial firms and unlisted companies
+- Structured financials (XBRL) start in FY2015. Some financial firms and unlisted companies
   don't file XBRL, so read their reports with `get_filing_text`.
-- A market-wide `get_recent_filings` search (no company given) is limited to 3 months by DART.
-- The glossary covers common filing types and accounts. Unknown terms come back with
-  `*_en: null`, and the calling LLM translates them.
+- Insider "changes" include grants, option exercises and inheritance, not only open-market trades.
+- Red flags are heuristics to start an investigation, not investment advice.
+- The glossary covers common terms. Unknown terms come back with `*_en: null`, and the LLM
+  translates them from the Korean, which is always included.
 
 ## Development
 
 ```bash
 uv sync
-uv run pytest
+uv run pytest            # offline: DART is mocked
 uv run ruff check src tests && uv run ruff format --check src tests
 ```
 
-The tests use a mocked DART backend, so no API key or network is needed.
+Contributions are welcome, especially new glossary terms and red-flag rules. See [CLAUDE.md](CLAUDE.md)
+for the architecture and conventions.
 
 ## License
 
-[MIT](LICENSE). Free to use, modify and redistribute, including commercially, as long as
-the copyright notice is kept. DART data belongs to the Financial Supervisory Service
-(금융감독원); follow OpenDART's terms of use.
+[MIT](LICENSE). Free to use, modify and redistribute, including commercially, as long as the
+copyright notice is kept. DART data belongs to the Financial Supervisory Service
+(금융감독원); follow OpenDART's terms of use. Nothing here is investment advice.

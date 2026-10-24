@@ -9,4 +9,4 @@ RUN useradd --create-home app && mkdir -p /data && chown app /data
 USER app
 VOLUME /data
 EXPOSE 8000
-CMD ["uv", "run", "--no-sync", "dart-mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "--no-sync", "korea-dart-mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000"]

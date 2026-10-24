@@ -17,18 +17,19 @@ def test_ticker_and_corp_code(index):
 def test_english_and_korean_names(index):
     assert index.resolve("Samsung Electronics").corp_code == "00126380"
     assert index.resolve("sk hynix").corp_code == "00164779"
-    assert index.resolve("현대모비스").corp_code == "00164788"
+    assert index.resolve("삼성물산").corp_code == "00149655"
+    assert index.resolve("Samsung C&T").corp_code == "00149655"
 
 
 def test_listed_ranks_before_unlisted(index):
-    results = index.search("samsung")
+    results = index.search("samsung electronics")
     assert [c.corp_code for c in results] == ["00126380", "00999999"]
     assert index.search("samsung", listed_only=True)[0].listed
 
 
 def test_ambiguous_raises_with_candidates(index):
-    with pytest.raises(LookupError, match="ambiguous.*Hyundai Motor"):
-        index.resolve("hyundai")
+    with pytest.raises(LookupError, match="ambiguous.*Samsung SDI"):
+        index.resolve("samsung")
 
 
 def test_no_match(index):

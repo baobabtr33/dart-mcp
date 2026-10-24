@@ -96,7 +96,7 @@ async def test_bad_input_becomes_tool_error(mock_dart):
     with pytest.raises(ToolError, match="14-digit"):
         await server.get_filing_text("123")
     with pytest.raises(ToolError, match="ambiguous"):
-        await server.get_company_profile("hyundai")
+        await server.get_company_profile("samsung")
 
 
 async def test_filing_text_paging_and_search(mock_dart):
@@ -144,3 +144,86 @@ async def test_zip_endpoint_error_is_parsed():
     client = DartClient("k", transport=httpx.MockTransport(lambda r: httpx.Response(200, content=xml)))
     with pytest.raises(DartError, match="Unregistered API key"):
         await client.get_zip("corpCode.xml")
+
+
+def test_windows_split_newest_first():
+    assert server.windows("20240101", "20240630", 90) == [
+        ("20240402", "20240630"),
+        ("20240103", "20240401"),
+        ("20240101", "20240102"),
+    ]
+
+
+async def test_material_events_market_wide_chunks_and_filters(mock_dart):
+    def handler(request):
+        p = request.url.params
+        rows = [
+            {
+                "report_nm": "주요사항보고서(전환사채권발행결정)",
+                "rcept_no": p["end_de"] + "000001",
+                "rcept_dt": p["end_de"],
+                "corp_cls": "K",
+                "corp_name": "테스트",
+            },
+            {
+                "report_nm": "기업설명회(IR)개최",
+                "rcept_no": p["end_de"] + "000002",
+                "rcept_dt": p["end_de"],
+                "corp_cls": "K",
+                "corp_name": "테스트",
+            },
+        ]
+        return httpx.Response(200, json={"status": "000", "total_count": 2, "total_page": 1, "list": rows})
+
+    seen = mock_dart({"list.json": handler})
+    out = await server.get_material_events(
+        categories=["dilution"], market="kosdaq", start_date="2024-01-01", end_date="2024-06-30"
+    )
+    assert len(seen) == 3  # three 90-day windows
+    assert all(r.url.params["corp_cls"] == "K" for r in seen)
+    assert out["filings_scanned"] == 6
+    assert out["events_matching"] == 3
+    assert {e["category"] for e in out["events"]} == {"dilution"}
+    assert "red_flags" not in out
+
+
+async def test_material_events_company_red_flags(mock_dart):
+    rows = [
+        {"report_nm": "주요사항보고서(전환사채권발행결정)", "rcept_no": f"2024010100000{i}", "rcept_dt": "20240101"}
+        for i in range(2)
+    ]
+    mock_dart({"list.json": {"status": "000", "total_count": 2, "total_page": 1, "list": rows}})
+    out = await server.get_material_events("005930")
+    assert any("dilutive" in f for f in out["red_flags"])
+
+
+async def test_compare_companies(mock_dart):
+    def handler(request):
+        code = request.url.params["corp_code"]
+        if code == "00164779":
+            return httpx.Response(200, json={"status": "013", "message": "no data"})
+        rows = [
+            {"fs_div": "CFS", "sj_div": "IS", "account_nm": "매출액", "thstrm_amount": "200", "frmtrm_amount": "100"},
+            {"fs_div": "CFS", "sj_div": "IS", "account_nm": "영업이익", "thstrm_amount": "20"},
+        ]
+        return httpx.Response(200, json={"status": "000", "list": rows})
+
+    mock_dart({"fnlttSinglAcnt.json": handler})
+    out = await server.compare_companies(["Samsung Electronics", "SK hynix"], 2024)
+    assert out["companies"][0]["revenue_growth_pct"] == 100.0
+    assert out["companies"][0]["operating_margin_pct"] == 10.0
+    assert out["unavailable"][0]["ticker"] == "000660"
+
+
+async def test_insider_trades_window_and_summary(mock_dart):
+    from datetime import date, timedelta
+
+    recent = (date.today() - timedelta(days=10)).strftime("%Y%m%d")
+    rows = [
+        {"rcept_no": recent + "000001", "rcept_dt": recent, "repror": "홍길동", "sp_stock_lmp_irds_cnt": "1,000"},
+        {"rcept_no": "20100101000001", "rcept_dt": "20100101", "repror": "옛날", "sp_stock_lmp_irds_cnt": "-5,000"},
+    ]
+    mock_dart({"elestock.json": {"status": "000", "list": rows}})
+    out = await server.get_insider_trades("005930", days=365)
+    assert out["total_reports"] == 1
+    assert out["summary"]["signal"] == "net_buying"

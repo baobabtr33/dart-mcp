@@ -1,0 +1,27 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.baobabtr33/dart-mcp",
+  "title": "Korea DART (English)",
+  "description": "Korean corporate filings (DART) in English: filings, financials, ownership and red flags.",
+  "repository": {
+    "url": "https://github.com/baobabtr33/dart-mcp",
+    "source": "github"
+  },
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "korea-dart-mcp",
+      "version": "0.2.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "DART_API_KEY",
+          "description": "Free OpenDART API key from https://opendart.fss.or.kr (see docs/GET_API_KEY.md)",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

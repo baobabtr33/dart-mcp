@@ -35,3 +35,16 @@ def test_parse_zip_orders_main_file_and_builds_toc():
 def test_find_snippets():
     hits = find_snippets("a" * 50 + "배당" + "b" * 50, "배당", radius=5)
     assert hits == [{"offset": 50, "snippet": "aaaaa배당bbbbb"}]
+
+
+def test_extract_section_by_english_alias():
+    from dart_mcp.document import FilingDocument, build_toc, extract_section
+
+    text = markup_to_text(MARKUP)
+    doc = FilingDocument("1", [], text, build_toc(text))
+    title, body = extract_section(doc, "business")
+    assert title == "II. 사업의 내용"
+    assert "메모리 사업" in body
+    title, body = extract_section(doc, "overview")
+    assert "반도체" in body and "메모리" not in body
+    assert extract_section(doc, "mdna") is None

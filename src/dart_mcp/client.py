@@ -70,7 +70,7 @@ class DartClient:
             base_url=BASE_URL,
             timeout=timeout,
             transport=transport,
-            headers={"User-Agent": "dart-mcp/0.1"},
+            headers={"User-Agent": "korea-dart-mcp/0.2"},
         )
         self._max_retries = max_retries
         self._cache_ttl = cache_ttl

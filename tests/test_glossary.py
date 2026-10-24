@@ -44,3 +44,8 @@ def test_lookup_terms():
     assert out["최대주주"] == "Largest shareholder"
     assert out["없는용어"] is None
     assert out["전환사채권 발행결정"] == "Convertible Bond (CB) Issuance Decision"
+
+
+def test_core_jargon_has_entries():
+    out = lookup_terms(["유상증자", "전환사채", "물적분할", "밸류업"])
+    assert all(out.values()), out

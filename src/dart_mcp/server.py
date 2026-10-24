@@ -13,18 +13,19 @@ import logging
 import os
 import re
 import sys
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, TypeVar
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp_types import ToolAnnotations
 
-from . import glossary
+from . import analysis, glossary
 from .client import DartClient, DartError
 from .corp_codes import Corp, CorpIndex, load_corp_index
-from .document import FilingDocument, find_snippets, parse_document_zip
+from .document import SECTION_ALIASES, FilingDocument, extract_section, find_snippets, parse_document_zip
 
 log = logging.getLogger("dart_mcp")
 
@@ -40,7 +41,9 @@ mcp = MCPServer(
         "Samsung Electronics), DART corp_code, or name in English or Korean. Responses "
         "include original Korean (`*_ko`) with English renderings (`*_en`); when an `_en` "
         "field is null, translate the Korean yourself. Amounts are in KRW (won) unless a "
-        "`currency` field says otherwise. Always cite `url` links to the original filing."
+        "`currency` field says otherwise. Always cite `url` links to the original filing. "
+        "Start with get_material_events for 'what's going on' questions, and read the "
+        "dart://guide/korea-primer resource for market context."
     ),
 )
 
@@ -85,6 +88,9 @@ class Service:
 
 
 service = Service()
+
+# All DART tools only read public data, so clients can safely auto-approve them.
+READ_ONLY = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=True)
 
 T = TypeVar("T")
 
@@ -181,19 +187,19 @@ def filing_row(row: dict[str, Any]) -> dict[str, Any]:
 # --- Tools ------------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 @tool_errors
 async def search_company(query: str, limit: int = 10, listed_only: bool = False) -> list[dict[str, Any]]:
     """Find Korean companies on DART by English name, Korean name, KRX ticker, or corp_code.
 
-    Use this first when unsure which entity a name refers to (e.g. "Hyundai" matches
+    Use this first when unsure which entity a name refers to (e.g. "Samsung" matches
     dozens of group companies). Listed companies rank first.
     """
     index = await service.index()
     return [c.to_dict() for c in index.search(query, limit=max(1, min(limit, 50)), listed_only=listed_only)]
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 @tool_errors
 async def get_company_profile(company: str) -> dict[str, Any]:
     """Company overview: English/Korean name, CEO, market, industry code, address, website, fiscal year-end.
@@ -224,71 +230,217 @@ async def get_company_profile(company: str) -> dict[str, Any]:
 FilingType = Literal[
     "periodic", "major_event", "issuance", "ownership", "other", "audit", "fund", "abs", "exchange", "ftc"
 ]
+Market = Literal["kospi", "kosdaq", "konex", "other"]
+_MARKET_CODES = {"kospi": "Y", "kosdaq": "K", "konex": "N", "other": "E"}
+
+# DART caps market-wide list.json searches at roughly 3 months, so longer ranges are split.
+MARKET_WINDOW_DAYS = 90
+MAX_LIST_PAGES = 30
 
 
-@mcp.tool()
+def date_range(days: int, start_date: str | None, end_date: str | None) -> tuple[str, str]:
+    end = parse_date(end_date, "end_date") or date.today().strftime("%Y%m%d")
+    start = parse_date(start_date, "start_date") or (
+        datetime.strptime(end, "%Y%m%d") - timedelta(days=max(1, days))
+    ).strftime("%Y%m%d")
+    if start > end:
+        raise ValueError("start_date must be on or before end_date.")
+    return start, end
+
+
+def windows(start: str, end: str, span_days: int) -> list[tuple[str, str]]:
+    """Split [start, end] into consecutive windows, newest first."""
+    lo = datetime.strptime(start, "%Y%m%d")
+    hi = datetime.strptime(end, "%Y%m%d")
+    out = []
+    while hi >= lo:
+        w_lo = max(lo, hi - timedelta(days=span_days - 1))
+        out.append((w_lo.strftime("%Y%m%d"), hi.strftime("%Y%m%d")))
+        hi = w_lo - timedelta(days=1)
+    return out
+
+
+async def collect_filings(params: dict[str, Any], start: str, end: str, limit: int) -> tuple[list[dict], int, bool]:
+    """Fetch filings newest first across pages (and 90-day windows when market-wide).
+
+    Returns (rows, total_reported_by_dart, truncated).
+    """
+    spans = [(start, end)] if "corp_code" in params else windows(start, end, MARKET_WINDOW_DAYS)
+    rows: list[dict] = []
+    total = 0
+    pages = 0
+    for i, (w_start, w_end) in enumerate(spans):
+        page = 1
+        while True:
+            d = await service.client.get_json(
+                "list.json", **params, bgn_de=w_start, end_de=w_end, page_no=page, page_count=100
+            )
+            pages += 1
+            if page == 1:
+                total += d.get("total_count", 0)
+            rows.extend(d.get("list", []))
+            more = page < d.get("total_page", 0) or i < len(spans) - 1
+            if len(rows) >= limit or pages >= MAX_LIST_PAGES:
+                return rows[:limit], total, len(rows) > limit or more
+            if page >= d.get("total_page", 0):
+                break
+            page += 1
+    return rows, total, False
+
+
+def list_params(
+    corp: Corp | None, filing_type: str | None, market: str | None, include_amended_originals: bool
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "last_reprt_at": "N" if include_amended_originals else "Y",
+        "sort": "date",
+        "sort_mth": "desc",
+    }
+    if corp:
+        params["corp_code"] = corp.corp_code
+    if filing_type:
+        params["pblntf_ty"] = glossary.FILING_TYPES[filing_type][0]
+    if market:
+        params["corp_cls"] = _MARKET_CODES[market]
+    return params
+
+
+@mcp.tool(annotations=READ_ONLY)
 @tool_errors
 async def get_recent_filings(
     company: str | None = None,
     days: int = 30,
     filing_type: FilingType | None = None,
+    market: Market | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     include_amended_originals: bool = False,
-    limit: int = 20,
-    page: int = 1,
+    limit: int = 30,
 ) -> dict[str, Any]:
     """List DART filings, newest first, with English titles where known.
 
-    - company: ticker / corp_code / name. Omit to see the whole market (DART limits
-      market-wide searches to a 3-month window).
+    - company: ticker / corp_code / name. Omit to search the whole market (long ranges are
+      split into 90-day windows automatically).
     - filing_type: periodic (annual/quarterly reports), major_event (M&A, capital raises,
       litigation), issuance, ownership (5% block / insider), other, audit, fund, abs,
       exchange (preliminary earnings, KRX inquiries), ftc.
-    - start_date / end_date (YYYY-MM-DD) override `days`.
-    Use get_filing_text with a returned rcept_no to read the filing body.
+    - market: kospi, kosdaq, konex, other.
+    - start_date / end_date (YYYY-MM-DD) override `days`. limit: up to 500.
+    For a red-flag digest use get_material_events. To read a filing use get_filing_text.
     """
-    end = parse_date(end_date, "end_date") or date.today().strftime("%Y%m%d")
-    start = parse_date(start_date, "start_date") or (
-        datetime.strptime(end, "%Y%m%d") - timedelta(days=max(1, days))
-    ).strftime("%Y%m%d")
-    params: dict[str, Any] = {
-        "bgn_de": start,
-        "end_de": end,
-        "last_reprt_at": "N" if include_amended_originals else "Y",
-        "page_no": max(1, page),
-        "page_count": max(1, min(limit, 100)),
-        "sort": "date",
-        "sort_mth": "desc",
-    }
-    corp = None
-    if company:
-        corp = await service.resolve(company)
-        params["corp_code"] = corp.corp_code
-    if filing_type:
-        params["pblntf_ty"] = glossary.FILING_TYPES[filing_type][0]
-    d = await service.client.get_json("list.json", **params)
+    start, end = date_range(days, start_date, end_date)
+    corp = await service.resolve(company) if company else None
+    params = list_params(corp, filing_type, market, include_amended_originals)
+    rows, total, truncated = await collect_filings(params, start, end, max(1, min(limit, 500)))
     return {
         **(corp_header(corp) if corp else {}),
         "range": f"{fmt_date(start)} to {fmt_date(end)}",
-        "total": d.get("total_count", 0),
-        "page": d.get("page_no", 1),
-        "total_pages": d.get("total_page", 0),
-        "filings": [filing_row(r) for r in d.get("list", [])],
+        "total": total,
+        "returned": len(rows),
+        "truncated": truncated,
+        "filings": [filing_row(r) for r in rows],
     }
 
 
-@mcp.tool()
+EventCategory = Literal[
+    "distress",
+    "control_change",
+    "dilution",
+    "exchange_scrutiny",
+    "litigation",
+    "capital_reduction",
+    "m_and_a",
+    "capital_return",
+    "earnings",
+    "large_contract",
+    "governance",
+    "ownership",
+    "periodic",
+    "other",
+]
+
+
+@mcp.tool(annotations=READ_ONLY)
+@tool_errors
+async def get_material_events(
+    company: str | None = None,
+    days: int = 180,
+    min_severity: Literal["info", "notable", "warning", "critical"] = "notable",
+    categories: list[EventCategory] | None = None,
+    market: Market | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """What happened, and should I worry? Material events classified in English, with red flags.
+
+    Classifies filings into categories (distress, control_change, dilution [CB/BW/rights
+    offerings], exchange_scrutiny, litigation, m_and_a, capital_return [buybacks/dividends],
+    earnings, large_contract, governance, ...) with a severity and a plain-English reason.
+    For a single company it also returns `red_flags`: Korea-specific warning patterns such
+    as serial convertible bond issuance, conversion price resets, and frequent amendments.
+
+    Omit `company` to scan the whole market, e.g. categories=["dilution"], market="kosdaq",
+    days=30 finds recent CB/BW/rights issues on KOSDAQ.
+    """
+    start, end = date_range(days, start_date, end_date)
+    corp = await service.resolve(company) if company else None
+    params = list_params(corp, None, market, False)
+    scan_limit = 1000 if corp else 3000
+    rows, total, truncated = await collect_filings(params, start, end, scan_limit)
+
+    wanted = set(categories or [])
+    floor = analysis.SEVERITY_ORDER[min_severity]
+    events: list[dict[str, Any]] = []
+    for r in rows:
+        title = r.get("report_nm", "")
+        category, severity, why = analysis.classify_filing(title)
+        events.append(
+            {
+                **filing_row(r),
+                "category": category,
+                "severity": severity,
+                "why_it_matters": why,
+                "amended": analysis.is_amendment(title),
+            }
+        )
+
+    window = (datetime.strptime(end, "%Y%m%d") - datetime.strptime(start, "%Y%m%d")).days + 1
+    matching = [
+        e for e in events if analysis.SEVERITY_ORDER[e["severity"]] >= floor and (not wanted or e["category"] in wanted)
+    ]
+    out: dict[str, Any] = {
+        **(corp_header(corp) if corp else {}),
+        "range": f"{fmt_date(start)} to {fmt_date(end)}",
+        "filings_scanned": len(events),
+        "scan_truncated": truncated,
+        "counts_by_category": dict(Counter(e["category"] for e in events).most_common()),
+        "events": matching[: max(1, min(limit, 300))],
+        "events_matching": len(matching),
+    }
+    if corp:
+        out["red_flags"] = analysis.red_flags(events, window)
+    return out
+
+
+@mcp.tool(annotations=READ_ONLY)
 @tool_errors
 async def get_filing_text(
-    rcept_no: str, offset: int = 0, max_chars: int = 20_000, search: str | None = None
+    rcept_no: str,
+    section: str | None = None,
+    offset: int = 0,
+    max_chars: int = 20_000,
+    search: str | None = None,
 ) -> dict[str, Any]:
     """Read the original text of a filing (Korean) by its 14-digit rcept_no.
 
-    Returns a table of contents with character offsets; page through long filings with
-    `offset`. Pass `search` (a Korean keyword such as 매출, 배당, 최대주주, 소송) to get
-    matching snippets instead of a page. Tables are flattened to ' | '-separated rows.
-    Translate the returned text as needed and cite `url`.
+    - section: jump to a part of the report by English name: overview, business, products,
+      risk_factors, mdna, financials, notes, dividends, audit, board, shareholders,
+      executives, compensation, affiliates, related_party, litigation, investor_protection.
+      A Korean heading keyword also works. `offset` then pages within the section.
+    - search: a Korean keyword (매출, 배당, 최대주주, 소송, 전환사채) returns matching snippets.
+    - Otherwise returns the document from `offset`, plus a table of contents on the first page.
+    Tables are flattened to ' | '-separated rows. Translate as needed and cite `url`.
     """
     if not re.fullmatch(r"\d{14}", rcept_no):
         raise ValueError("rcept_no must be the 14-digit receipt number from get_recent_filings.")
@@ -296,15 +448,25 @@ async def get_filing_text(
     base = {"rcept_no": rcept_no, "url": VIEWER_URL.format(rcept_no), "total_chars": len(doc.text)}
     if search:
         return {**base, "search": search, "matches": find_snippets(doc.text, search)}
+    text = doc.text
+    if section:
+        found = extract_section(doc, section)
+        if found is None:
+            raise LookupError(
+                f"Section {section!r} not found in this filing. Known aliases: {', '.join(SECTION_ALIASES)}. "
+                f"Headings in this filing: {[t['title'] for t in doc.toc[:40]]}"
+            )
+        base["section"], text = found
+        base["section_chars"] = len(text)
     offset = max(0, offset)
     size = max(1_000, min(max_chars, MAX_DOC_CHARS))
-    chunk = doc.text[offset : offset + size]
+    chunk = text[offset : offset + size]
     next_offset = offset + len(chunk)
     return {
         **base,
-        "toc": doc.toc if offset == 0 else None,
+        "toc": doc.toc if offset == 0 and not section else None,
         "offset": offset,
-        "next_offset": next_offset if next_offset < len(doc.text) else None,
+        "next_offset": next_offset if next_offset < len(text) else None,
         "text": chunk,
     }
 
@@ -325,7 +487,30 @@ def _fs_row(r: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-@mcp.tool()
+async def fetch_statements(
+    corp: Corp, year: int, period: str, consolidated: bool, detail: str
+) -> tuple[list[dict[str, Any]], str, bool]:
+    """Return (rows, basis, used_fallback), preferring the requested consolidation basis."""
+    params = {"corp_code": corp.corp_code, "bsns_year": check_year(year), "reprt_code": report_code(period)}
+    order = ["CFS", "OFS"] if consolidated else ["OFS", "CFS"]
+    for basis in order:
+        if detail == "full":
+            d = await service.client.get_json("fnlttSinglAcntAll.json", fs_div=basis, **params)
+            rows = d.get("list", [])
+        else:
+            d = await service.client.get_json("fnlttSinglAcnt.json", **params)
+            rows = [r for r in d.get("list", []) if r.get("fs_div") == basis]
+        if rows:
+            return rows, basis, basis != order[0]
+    raise LookupError(
+        f"No XBRL financial statements for {corp.name_en or corp.name_ko} {year} {period}. "
+        "The report may not be filed yet, or the company (e.g. some financial firms, unlisted "
+        "entities) does not file XBRL. Try get_recent_filings with filing_type='periodic' "
+        "and read the report with get_filing_text."
+    )
+
+
+@mcp.tool(annotations=READ_ONLY)
 @tool_errors
 async def get_financial_statements(
     company: str,
@@ -343,30 +528,11 @@ async def get_financial_statements(
       liabilities, equity); full = every line of BS, IS, CIS, CF, SCE.
     Amounts are integers in KRW (won). 'current' is the reported period; for quarterly
     income statements 'current' is the 3-month quarter and 'current_year_to_date' is cumulative.
+    `key_metrics` gives revenue growth, operating/net margin, ROE and debt-to-equity in percent
+    (not annualized for quarters).
     """
     corp = await service.resolve(company)
-    params = {"corp_code": corp.corp_code, "bsns_year": check_year(year), "reprt_code": report_code(period)}
-    order = ["CFS", "OFS"] if consolidated else ["OFS", "CFS"]
-
-    rows: list[dict[str, Any]] = []
-    basis = order[0]
-    for basis in order:
-        if detail == "full":
-            d = await service.client.get_json("fnlttSinglAcntAll.json", fs_div=basis, **params)
-            rows = d.get("list", [])
-        else:
-            d = await service.client.get_json("fnlttSinglAcnt.json", **params)
-            rows = [r for r in d.get("list", []) if r.get("fs_div") == basis]
-        if rows:
-            break
-    if not rows:
-        raise LookupError(
-            f"No XBRL financial statements for {corp.name_en or corp.name_ko} {year} {period}. "
-            "The report may not be filed yet, or the company (e.g. some financial firms, unlisted "
-            "entities) does not file XBRL. Try get_recent_filings with filing_type='periodic' "
-            "and read the report with get_filing_text."
-        )
-
+    rows, basis, fallback = await fetch_statements(corp, year, period, consolidated, detail)
     statements: dict[str, dict[str, Any]] = {}
     for r in rows:
         sj = r.get("sj_div", "")
@@ -389,17 +555,56 @@ async def get_financial_statements(
     return {
         **corp_header(corp),
         "fiscal_year": year,
-        "period": glossary.REPORT_CODE_NAMES[params["reprt_code"]],
+        "period": glossary.REPORT_CODE_NAMES[report_code(period)],
         "basis": glossary.FS_DIV[basis],
-        "basis_fallback": basis != order[0],
+        "basis_fallback": fallback,
         "currency": first.get("currency") or "KRW",
         "unit": "won",
         "source_filing": VIEWER_URL.format(first.get("rcept_no")) if first.get("rcept_no") else None,
+        "key_metrics": analysis.key_metrics([line for st in statements.values() for line in st["lines"]]),
         "statements": list(statements.values()),
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
+@tool_errors
+async def compare_companies(
+    companies: list[str],
+    year: int,
+    period: Literal["annual", "half", "q1", "q3"] = "annual",
+    consolidated: bool = True,
+) -> dict[str, Any]:
+    """Side-by-side key metrics for up to 10 companies: revenue, profit, growth, margins, ROE, leverage.
+
+    Use for peer comparisons, e.g. ["Samsung Electronics", "SK hynix"]. Amounts in KRW (won).
+    Companies without XBRL data for the period are listed under `unavailable`.
+    """
+    if not 1 <= len(companies) <= 10:
+        raise ValueError("Pass between 1 and 10 companies.")
+    corps = [await service.resolve(c) for c in companies]
+
+    async def one(corp: Corp) -> dict[str, Any]:
+        try:
+            rows, basis, _ = await fetch_statements(corp, year, period, consolidated, "summary")
+        except LookupError as exc:
+            return {**corp_header(corp), "error": str(exc)}
+        return {
+            **corp_header(corp),
+            "basis": glossary.FS_DIV[basis],
+            **analysis.key_metrics([_fs_row(r) for r in rows]),
+        }
+
+    results = await asyncio.gather(*(one(c) for c in corps))
+    return {
+        "fiscal_year": year,
+        "period": glossary.REPORT_CODE_NAMES[report_code(period)],
+        "currency": "KRW",
+        "companies": [r for r in results if "error" not in r],
+        "unavailable": [r for r in results if "error" in r],
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
 @tool_errors
 async def get_major_shareholder_changes(company: str, limit: int = 20) -> dict[str, Any]:
     """5% block-holding reports (대량보유상황보고): who crossed or changed a 5%+ stake.
@@ -433,39 +638,48 @@ async def get_major_shareholder_changes(company: str, limit: int = 20) -> dict[s
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 @tool_errors
-async def get_insider_trades(company: str, limit: int = 20) -> dict[str, Any]:
-    """Executive and major-shareholder ownership reports (임원ㆍ주요주주 소유보고).
+async def get_insider_trades(company: str, days: int = 365, limit: int = 20) -> dict[str, Any]:
+    """Executive and major-shareholder ownership reports (임원ㆍ주요주주 소유보고), with a net signal.
 
     Korea's equivalent of SEC Form 4: holdings and changes by directors, officers, and
-    10%+ holders. Newest first.
+    10%+ holders. `summary.signal` aggregates the last `days`: net_buying_cluster,
+    net_buying, mixed, net_selling, net_selling_cluster, or no_change. Reports newest first.
     """
     corp = await service.resolve(company)
     d = await service.client.get_json("elestock.json", corp_code=corp.corp_code)
-    items = sorted(d.get("list", []), key=lambda r: r.get("rcept_no", ""), reverse=True)
+    cutoff = (date.today() - timedelta(days=max(1, days))).strftime("%Y%m%d")
+    items = sorted(
+        (r for r in d.get("list", []) if (r.get("rcept_dt") or "") >= cutoff),
+        key=lambda r: r.get("rcept_no", ""),
+        reverse=True,
+    )
+    reports = [
+        {
+            "date": fmt_date(r.get("rcept_dt")),
+            "insider_ko": r.get("repror"),
+            "registered_executive_ko": r.get("isu_exctv_rgist_at"),
+            "position_ko": r.get("isu_exctv_ofcps"),
+            "major_shareholder_ko": r.get("isu_main_shrholdr"),
+            "shares_held": parse_amount(r.get("sp_stock_lmp_cnt")),
+            "shares_change": parse_amount(r.get("sp_stock_lmp_irds_cnt")),
+            "ownership_pct": parse_amount(r.get("sp_stock_lmp_rate")),
+            "ownership_pct_change": parse_amount(r.get("sp_stock_lmp_irds_rate")),
+            "url": VIEWER_URL.format(r.get("rcept_no")),
+        }
+        for r in items
+    ]
     return {
         **corp_header(corp),
-        "total_reports": len(items),
-        "reports": [
-            {
-                "date": fmt_date(r.get("rcept_dt")),
-                "insider_ko": r.get("repror"),
-                "registered_executive_ko": r.get("isu_exctv_rgist_at"),
-                "position_ko": r.get("isu_exctv_ofcps"),
-                "major_shareholder_ko": r.get("isu_main_shrholdr"),
-                "shares_held": parse_amount(r.get("sp_stock_lmp_cnt")),
-                "shares_change": parse_amount(r.get("sp_stock_lmp_irds_cnt")),
-                "ownership_pct": parse_amount(r.get("sp_stock_lmp_rate")),
-                "ownership_pct_change": parse_amount(r.get("sp_stock_lmp_irds_rate")),
-                "url": VIEWER_URL.format(r.get("rcept_no")),
-            }
-            for r in items[: max(1, min(limit, 100))]
-        ],
+        "window_days": days,
+        "total_reports": len(reports),
+        "summary": analysis.insider_summary(reports),
+        "reports": reports[: max(1, min(limit, 100))],
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 @tool_errors
 async def get_largest_shareholders(
     company: str, year: int, period: Literal["annual", "half", "q1", "q3"] = "annual"
@@ -505,7 +719,7 @@ async def get_largest_shareholders(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 @tool_errors
 async def get_dividends(
     company: str, year: int, period: Literal["annual", "half", "q1", "q3"] = "annual"
@@ -535,7 +749,7 @@ async def get_dividends(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False))
 async def translate_terms(terms: list[str]) -> dict[str, str | None]:
     """Look up Korean disclosure, accounting, and governance terms in a curated glossary.
 
@@ -551,16 +765,59 @@ def filing_types_resource() -> str:
     return "\n".join(f"{k} ({code}): {desc}" for k, (code, desc) in glossary.FILING_TYPES.items())
 
 
+KOREA_PRIMER = """\
+# Reading Korean corporate filings: a primer for foreign analysts
+
+## The system
+- DART (dart.fss.or.kr) is run by the Financial Supervisory Service (FSS), Korea's SEC
+  counterpart. Every listed company and large unlisted company files here.
+- Markets: KOSPI (main board, large caps), KOSDAQ (growth/tech, smaller, more retail-driven),
+  KONEX (startups). Tickers are 6 digits; preferred shares usually end in 5 (005935).
+- Almost everything is in Korean only. English filings are voluntary and rare.
+
+## Filings that map to US equivalents
+- 사업보고서 Annual Report ≈ 10-K (due 90 days after fiscal year-end; most FYs end in December)
+- 반기/분기보고서 Half-year/Quarterly Report ≈ 10-Q. There is no Q4 report; use the annual.
+- 주요사항보고서 Major Matters Report and exchange disclosures ≈ 8-K
+- 주식등의대량보유상황보고서 5% Block Holding Report ≈ 13D/13G (filed within 5 business days)
+- 임원ㆍ주요주주 소유상황보고서 Insider Ownership Report ≈ Form 4
+- 증권신고서 / 투자설명서 Registration Statement / Prospectus ≈ S-1 / 424B
+
+## Things that surprise foreign investors
+- Chaebol: family-controlled groups (Samsung, SK, LG and others) control dozens of listed and
+  unlisted affiliates through cross-holdings, often with a small direct family stake.
+  "Largest shareholder" (최대주주) includes related parties (특수관계인) as a bloc.
+- Consolidated (연결) vs separate (별도) statements: holding companies look very different on
+  each basis. Dividends are often set from separate earnings.
+- Convertible bonds (CB) with conversion-price refixing (리픽싱) are common at KOSDAQ small caps
+  and are a frequent source of dilution.
+- Spin-offs (물적분할) where the parent keeps all shares of the new company have historically
+  hurt minority shareholders.
+- The "Corporate Value-up" program (기업가치제고계획, 2024~) encourages buybacks, cancellations,
+  and higher payouts to close the "Korea discount".
+- Numbers: 억 = 100 million, 조 = 1 trillion. Filings often report in 백만원 (millions of won).
+  This server returns raw won.
+- Korean names: family name first (이재용 = Lee Jae-yong). Romanization varies between sources.
+"""
+
+
+@mcp.resource("dart://guide/korea-primer")
+def korea_primer() -> str:
+    """Primer on Korean disclosure rules, markets and pitfalls for foreign analysts."""
+    return KOREA_PRIMER
+
+
 @mcp.prompt()
 def company_brief(company: str) -> str:
     """English investment brief on a Korean company from its DART filings."""
     return (
         f"Write an English brief on {company} using the DART tools. Steps: "
-        "1) get_company_profile; 2) get_financial_statements for the latest two fiscal years "
-        "(summary) and compute growth and margins; 3) get_recent_filings for the last 90 days "
-        "and flag material events (capital raises, CBs, M&A, litigation, largest-shareholder "
-        "changes); 4) get_largest_shareholders and get_major_shareholder_changes for control "
-        "and activist signals. Cite filing URLs. Note anything you translated yourself."
+        "1) get_company_profile; 2) get_financial_statements (summary) for the latest fiscal year "
+        "and use key_metrics; 3) get_material_events for the last 180 days and explain any "
+        "red_flags; 4) get_largest_shareholders, get_major_shareholder_changes and "
+        "get_insider_trades for control and insider signals; 5) get_filing_text with "
+        "section='business' on the latest annual report for what the company actually does. "
+        "Cite filing URLs. Note anything you translated yourself."
     )
 
 
