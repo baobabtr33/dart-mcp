@@ -328,33 +328,21 @@ def key_metrics(lines: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def is_key_insider(report: dict[str, Any]) -> bool:
-    """Registered directors and major (10%+) shareholders: the trades that carry signal.
+    """Registered directors (등기임원) or major (10%+) shareholders, per the filing itself.
 
     Large Korean companies file thousands of reports for non-registered executives receiving
-    stock compensation, which would otherwise drown out the signal.
+    stock compensation, so totals are reported for this group separately.
     """
     registered = (report.get("registered_executive_ko") or "").replace(" ", "") == "등기임원"
     major = (report.get("major_shareholder_ko") or "-").strip() not in ("-", "", "해당없음")
     return registered or major
 
 
-def _flow(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    buys = [r for r in rows if (r.get("shares_change") or 0) > 0]
-    sells = [r for r in rows if (r.get("shares_change") or 0) < 0]
-    bought = sum(r["shares_change"] for r in buys)
-    sold = -sum(r["shares_change"] for r in sells)
-    if not buys and not sells:
-        signal = "no_change"
-    elif bought >= 2 * sold and len(buys) >= 3:
-        signal = "net_buying_cluster"
-    elif sold >= 2 * bought and len(sells) >= 3:
-        signal = "net_selling_cluster"
-    elif bought > sold:
-        signal = "net_buying"
-    elif sold > bought:
-        signal = "net_selling"
-    else:
-        signal = "mixed"
+def _totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    ups = [r for r in rows if (r.get("shares_change") or 0) > 0]
+    downs = [r for r in rows if (r.get("shares_change") or 0) < 0]
+    increased = sum(r["shares_change"] for r in ups)
+    decreased = -sum(r["shares_change"] for r in downs)
 
     def top(group: list[dict[str, Any]]) -> list[dict[str, Any]]:
         per: Counter[str] = Counter()
@@ -363,35 +351,23 @@ def _flow(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return [{"insider_ko": name, "shares": n} for name, n in per.most_common(5)]
 
     return {
-        "signal": signal,
-        "buy_reports": len(buys),
-        "sell_reports": len(sells),
-        "shares_bought": bought,
-        "shares_sold": sold,
-        "net_shares": bought - sold,
-        "distinct_insiders": len({r.get("insider_ko") for r in buys + sells}),
-        "top_buyers": top(buys),
-        "top_sellers": top(sells),
+        "reports": len(rows),
+        "reports_with_increase": len(ups),
+        "reports_with_decrease": len(downs),
+        "shares_increased": increased,
+        "shares_decreased": decreased,
+        "net_shares_change": increased - decreased,
+        "distinct_insiders": len({r.get("insider_ko") for r in rows}),
+        "largest_increases": top(ups),
+        "largest_decreases": top(downs),
     }
 
 
 def insider_summary(reports: list[dict[str, Any]]) -> dict[str, Any]:
-    """Net buy/sell signal, led by registered directors and major shareholders."""
-    key = [r for r in reports if is_key_insider(r)]
-    everyone = _flow(reports)
-    notes = [
-        "Changes include grants, option exercises and inheritance, not only open-market trades. "
-        "Open the filing url to see the reason."
-    ]
-    if everyone["distinct_insiders"] >= 30 and len(key) < len(reports) / 5:
-        notes.append(
-            f"{everyone['distinct_insiders']} insiders filed, mostly non-registered executives. That pattern "
-            "usually reflects stock compensation, so rely on key_insiders for the signal."
-        )
+    """Share-count totals as filed, for key insiders and for everyone. No interpretation."""
     return {
-        "signal": _flow(key)["signal"] if key else everyone["signal"],
-        "signal_basis": "key_insiders" if key else "all_insiders",
-        "key_insiders": _flow(key),
-        "all_insiders": everyone,
-        "notes": notes,
+        "key_insiders": _totals([r for r in reports if is_key_insider(r)]),
+        "all_insiders": _totals(reports),
+        "note": "Share changes as reported. They include grants, option exercises, inheritance and gifts, "
+        "not only market trades; the reason is in each filing at its url.",
     }

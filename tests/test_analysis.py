@@ -106,16 +106,18 @@ def test_key_metrics_missing_revenue():
     assert m == {"total_equity": 10}
 
 
-def test_insider_summary_buying_cluster():
+def test_insider_summary_totals():
     reports = [{"insider_ko": n, "shares_change": c} for n, c in [("A", 100), ("B", 50), ("A", 30), ("C", -10)]]
     s = insider_summary(reports)
-    assert s["signal"] == "net_buying_cluster"
-    assert s["signal_basis"] == "all_insiders"
-    assert s["all_insiders"]["net_shares"] == 170
-    assert s["all_insiders"]["top_buyers"][0] == {"insider_ko": "A", "shares": 130}
+    assert "signal" not in s
+    t = s["all_insiders"]
+    assert (t["shares_increased"], t["shares_decreased"], t["net_shares_change"]) == (180, 10, 170)
+    assert t["distinct_insiders"] == 3
+    assert t["largest_increases"][0] == {"insider_ko": "A", "shares": 130}
+    assert s["key_insiders"]["reports"] == 0
 
 
-def test_insider_signal_ignores_compensation_noise():
+def test_insider_summary_separates_key_insiders():
     grants = [
         {
             "insider_ko": f"직원{i}",
@@ -135,11 +137,10 @@ def test_insider_signal_ignores_compensation_noise():
         for _ in range(3)
     ]
     s = insider_summary(grants + director_sells)
-    assert s["all_insiders"]["signal"] == "net_buying_cluster"
-    assert s["signal"] == "net_selling_cluster"
-    assert s["signal_basis"] == "key_insiders"
-    assert any("stock compensation" in n for n in s["notes"])
+    assert s["all_insiders"]["net_shares_change"] == 2500
+    assert s["key_insiders"]["net_shares_change"] == -1500
+    assert s["key_insiders"]["distinct_insiders"] == 1
 
 
 def test_insider_summary_empty():
-    assert insider_summary([])["signal"] == "no_change"
+    assert insider_summary([])["all_insiders"]["reports"] == 0

@@ -630,7 +630,7 @@ async def get_major_shareholder_changes(company: str, limit: int = 20) -> dict[s
     """5% block-holding reports (대량보유상황보고): who crossed or changed a 5%+ stake.
 
     Korea's equivalent of SEC Schedule 13D/13G. Shows filer, shares held, ownership %,
-    change vs. prior report, and stated reason. Newest first. Key activist/M&A signal.
+    change vs. prior report, and stated reason. Newest first.
     """
     corp = await service.resolve(company)
     d = await service.client.get_json("majorstock.json", corp_code=corp.corp_code)
@@ -661,11 +661,13 @@ async def get_major_shareholder_changes(company: str, limit: int = 20) -> dict[s
 @mcp.tool(annotations=READ_ONLY)
 @tool_errors
 async def get_insider_trades(company: str, days: int = 365, limit: int = 20) -> dict[str, Any]:
-    """Executive and major-shareholder ownership reports (임원ㆍ주요주주 소유보고), with a net signal.
+    """Executive and major-shareholder ownership reports (임원ㆍ주요주주 소유보고).
 
     Korea's equivalent of SEC Form 4: holdings and changes by directors, officers, and
-    10%+ holders. `summary.signal` aggregates the last `days`: net_buying_cluster,
-    net_buying, mixed, net_selling, net_selling_cluster, or no_change. Reports newest first.
+    10%+ holders. `summary` gives share-count totals for the last `days`, separately for
+    key insiders (registered directors and 10%+ holders) and for all filers. Changes include
+    grants, option exercises, inheritance and gifts; open a report's url for the reason.
+    Reports newest first.
     """
     corp = await service.resolve(company)
     d = await service.client.get_json("elestock.json", corp_code=corp.corp_code)
@@ -835,7 +837,7 @@ def company_brief(company: str) -> str:
         "1) get_company_profile; 2) get_financial_statements (summary) for the latest fiscal year "
         "and use key_metrics; 3) get_material_events for the last 180 days and explain any "
         "red_flags; 4) get_largest_shareholders, get_major_shareholder_changes and "
-        "get_insider_trades for control and insider signals; 5) get_filing_text with "
+        "get_insider_trades for ownership and insider holdings; 5) get_filing_text with "
         "section='business' on the latest annual report for what the company actually does. "
         "Cite filing URLs. Note anything you translated yourself."
     )

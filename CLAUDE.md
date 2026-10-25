@@ -22,7 +22,7 @@ v1 `FastMCP`), httpx, uv.
 - `src/dart_mcp/glossary.py`: curated Korean-to-English mappings for codes, filing titles,
   accounts and governance terms. This is the product's core value.
 - `src/dart_mcp/analysis.py`: pure diagnostics with no I/O: filing event classification
-  (`EVENT_RULES`), red-flag rules, key financial ratios, insider buy/sell signal.
+  (`EVENT_RULES`), red-flag rules, key financial ratios, insider share-change totals.
 - `src/dart_mcp/document.py`: turns DART filing ZIPs (DSD/XML markup) into text with a TOC.
   `SECTION_ALIASES` maps English section names to Korean headings.
 - `docs/GET_API_KEY.md`: English signup guide. `marketing/LAUNCH.md`: launch kit.
@@ -46,6 +46,8 @@ v1 `FastMCP`), httpx, uv.
 - Use Samsung Electronics (005930) in all examples, docs and marketing copy.
 - Domain rules (event categories, red flags, ratios) go in `analysis.py` as plain functions with
   unit tests, never inline in tools.
+- Report data, not verdicts: no buy/sell or sentiment signals. Totals, counts and ratios computed
+  from filings are fine.
 - Every tool is registered with `annotations=READ_ONLY`, since it only reads public data.
 
 ## Adding a tool

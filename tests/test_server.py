@@ -234,4 +234,4 @@ async def test_insider_trades_window_and_summary(mock_dart):
     mock_dart({"elestock.json": {"status": "000", "list": rows}})
     out = await server.get_insider_trades("005930", days=365)
     assert out["total_reports"] == 1
-    assert out["summary"]["signal"] == "net_buying"
+    assert out["summary"]["all_insiders"]["net_shares_change"] == 1000

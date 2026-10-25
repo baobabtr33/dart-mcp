@@ -58,7 +58,7 @@ read Korean.
 | `compare_companies` | Revenue, margins, ROE and leverage for up to 10 companies side by side |
 | `get_filing_text` | Read any filing by section (`business`, `mdna`, `risk_factors`, `audit`, ...), by keyword, or page by page |
 | `get_recent_filings` | Filings for a company or the whole market, with English titles. Ranges longer than 90 days are split automatically |
-| `get_insider_trades` | Korea's Form 4, with a net buy/sell signal across insiders |
+| `get_insider_trades` | Korea's Form 4: each insider's holdings and share changes, with totals for directors and 10%+ holders |
 | `get_major_shareholder_changes` | Korea's 13D/13G: who crossed or changed a 5% stake |
 | `get_largest_shareholders` | Controlling shareholder and related parties, i.e. the chaebol control structure |
 | `get_dividends` | Dividend per share, payout ratio and yield |
@@ -107,7 +107,7 @@ from source instead, use `"command": "uv", "args": ["--directory", "/path/to/dar
 - "Write an English investment brief on Samsung Electronics." (or use the `company_brief` prompt)
 - "Compare Samsung Electronics and SK hynix on margins and ROE for 2024."
 - "Who controls Samsung Electronics? Show the largest shareholder and related parties."
-- "Have Samsung Electronics insiders been buying or selling this year?"
+- "How many shares did Samsung Electronics directors and major shareholders add or dispose of this year?"
 - "Summarize the business section of Samsung Electronics' latest annual report in English."
 - "Which KOSDAQ companies announced convertible bond issues in the last 30 days?"
 
