@@ -7,6 +7,7 @@
 [![CI](https://github.com/baobabtr33/dart-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/baobabtr33/dart-mcp/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/korea-dart-mcp)](https://pypi.org/project/korea-dart-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![M8ven Score](https://m8ven.ai/badge/mcp/baobabtr33-dart-mcp-1yesyp)](https://m8ven.ai/mcp/baobabtr33-dart-mcp-1yesyp?s=readme)
 
 Korea has one of the world's largest stock markets, yet its disclosure system, DART, is
 almost entirely in Korean. Samsung's annual report, a KOSDAQ company's convertible bond terms, and
